@@ -17,6 +17,12 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+*.Rhistory
+
+repdata_data_StormData.csv.bz2
+storm_files
+storm_cache
+
 # =========================
 # Operating System Files
 # =========================

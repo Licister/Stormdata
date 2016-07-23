@@ -1,0 +1,198 @@
+---
+title: "Public Health and Economic Consequences of Severe Weathe Events in the US"
+author: "André Martinez Lima"
+date: "February 22, 2015"
+output: html_document
+---
+
+##Synopsis
+The goal of this report is to look at the NOAA Storm Database and find out which types of events are the most harmful, both to the population health and the economy. This report looks only at data from 1993 onwards, in the United States of America. Regarding public health, we will analyse separately the total number of injuries and the total number of fatalities resulting from a particular event. As for the economy, we will look into crop and property damage (combined), measured in billions of dollars, for a particular event. After calculating the total values for these variables per event type, we conclude that the most harmful events are tornadoes, floods and flashfloods, heat and excessive heat, thunderstorm winds, lightning and storm surges. For public health, the most harmful events are tornadoes (for injuries and fatalities) and excessive heat (for fatalities). Storm surges had the most negative economic consequences.
+
+<br />  
+
+
+##Data Processing
+We'll start by loading the required libraries:
+```{r libraries, results = "hide"}
+library(plyr)
+library(grid)
+library(gridBase)
+```
+
+We'll set the locale to English to avoid any issues with different languages.
+```{r locale, results = "hide"}
+Sys.setlocale("LC_TIME", "C")
+```
+
+
+Reading in the NOAA Storm Database, using `read.csv`. For more information on this database, check the [National Weather Service Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) and the [National Climatic Data Center Storm Events FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf).
+
+```{r readstorm, cache = TRUE}
+stormdata <- read.csv(bzfile("repdata_data_StormData.csv.bz2"))
+```
+  
+The raw data was very messy, which required a lot of cleaning. This doesn't completely clean the data set, but it is enough to not have any major effects on the final results. The column names were changed from upper case to lower case, then only the necessary columns were selected. The "bgn_date" column was changed to a date object, had its year extracted and was then converted to a numeric object. Finally, it was renamed to "year".
+```{r stormclean, cache = TRUE}
+names(stormdata) <- tolower(names(stormdata))
+storm <- stormdata[, c("countyname", "state", "evtype", "fatalities", "injuries", "propdmg", "propdmgexp", "cropdmg", "cropdmgexp", "bgn_date")]
+storm$bgn_date <- as.Date(storm$bgn_date, "%m/%d/%Y %H:%M:%S")
+storm$bgn_date <- as.numeric(format(storm$bgn_date, "%Y"))
+names(storm)[10] <- "year"
+```
+
+The data was subset to only include observations in which there were fatalities, injuries, property damage or crop damage. To try to put together the different names of event types that referred to the same type of event, the observations in the "evtype" column were converted from upper case to lower case and spaces or other symbols (such as parentheses) were converted to dots. These dots are then removed. Some other changes have been made to try to reduce the number of different names for a particular type of event.
+```{r stormsubset, cache = TRUE}
+storm <- storm[with(storm, which(fatalities > 0 | injuries > 0 | propdmg  > 0 | cropdmg > 0)), ]
+storm$evtype <- as.character(storm$evtype)
+storm$evtype <- make.names(tolower(storm$evtype))
+storm$evtype <- gsub("\\.", "", storm$evtype)
+storm$evtype <- sub("^typhoon$", "hurricanetyphoon", storm$evtype)
+storm[grep("*hurricane*", storm$evtype), 3] <- "hurricanetyphoon"
+storm$evtype <- sub("thunderstorm", "tstm", storm$evtype)
+storm[grep("marinetstm", storm$evtype), 3] <- "marinethunderstormwind"
+storm[grep("tstm", storm$evtype), 3] <- "thunderstormwind"
+storm[grep("coastal", storm$evtype), 3] <- "coastal"
+storm[grep("flashflood", storm$evtype), 3] <- "flash"
+storm[grep("flood", storm$evtype), 3] <- "flood"
+storm[grep("flash", storm$evtype), 3] <- "flashflood"
+storm[grep("urbansmlstreamfld", storm$evtype), 3] <- "flood"
+storm[grep("frost", storm$evtype), 3] <- "frostfreeze"
+storm[grep("freeze", storm$evtype), 3] <- "frostfreeze"
+storm[grep("tropicalstormjerry", storm$evtype), 3] <- "tropicalstorm"
+storm[grep("highwinds", storm$evtype), 3] <- "highwind"
+storm[grep("stormsurge", storm$evtype), 3] <- "stormsurge"
+storm[grep("heavyrains", storm$evtype), 3] <- "heavyrain"
+storm[grep("wildfire", storm$evtype), 3] <- "wildfire"
+storm[grep("extremecold", storm$evtype), 3] <- "extremecold"
+storm[grep("winterweather", storm$evtype), 3] <- "winterweather"
+storm$evtype <- sub("^drought$", "Drought", storm$evtype)
+storm$evtype <- sub("^heat$", "Heat", storm$evtype)
+storm$evtype <- sub("^extremecold$", "Extreme Cold", storm$evtype)
+storm$evtype <- sub("^flood$", "Flood", storm$evtype)
+storm$evtype <- sub("^excessiveheat$", "Excessive Heat", storm$evtype)
+storm$evtype <- sub("^flashflood$", "Flash Flood", storm$evtype)
+storm$evtype <- sub("^hail$", "Hail", storm$evtype)
+storm$evtype <- sub("^highwind$", "High Wind", storm$evtype)
+storm$evtype <- sub("^icestorm$", "Ice Storm", storm$evtype)
+storm$evtype <- sub("^lightning$", "Lightning", storm$evtype)
+storm$evtype <- sub("^ripcurrent$", "Rip Current", storm$evtype)
+storm$evtype <- sub("^stormsurge$", "Storm Surge/Tide", storm$evtype)
+storm$evtype <- sub("^thunderstormwind$", "Thunderstorm Wind", storm$evtype)
+storm$evtype <- sub("^tornado$", "Tornado", storm$evtype)
+storm$evtype <- sub("^tropicalstorm$", "Tropical Storm", storm$evtype)
+storm$evtype <- sub("^hurricanetyphoon$", "Hurricane (Typhoon)", storm$evtype)
+```
+  
+   
+The "cropdmgexp" and "propdmgexp" tell us the magnitude of the crop or property damage, using letters such "M" or "B" to represent millions and billions. These were converted to the actual numbers so that the total value can be calculated. These total values were stored in their own column in the data set. Finally, we sum these two values so that we can measure the total damage in dollars.  
+You'll notice there's a line in the code chunk that changes one of the values directly. This is because the value of the property damage for the flood in Napa in 2006 is evaluated in 115 billion dollars, which is a very high number. According to the [California Department of Water Resources] [1], the damage was evaluated as 115 million dollars, not billion.
+```{r stormexp}
+storm$cropdmgexp <- mapvalues(storm$cropdmgexp, c("","K", "k", "M", "m", "B", "2","0", "?"),  c("1", "1000", "1000", "1000000", "1000000", "1000000000", "10", "1", "0"))
+storm$cropdmgexp <- as.numeric(as.character(storm$cropdmgexp))
+storm$crops <- storm$cropdmg * storm$cropdmgexp
+
+storm$propdmgexp <- sub("^[0-8]$", "10", storm$propdmgexp)
+storm$propdmgexp <- mapvalues(storm$propdmgexp, c("", "K", "M", "m", "B", "H", "h", "+", "-"), c("1", "1000", "1000000", "1000000","1000000000", "100", "100", "1", "0"))
+storm$propdmgexp <- as.numeric(as.character(storm$propdmgexp))
+storm$props <- storm$propdmg * storm$propdmgexp
+storm[which(storm$props == max(storm$props)), "props"] <- storm[which(storm$props == max(storm$props)), "props"] / 1000
+
+storm$totaldmg <- storm$crops + storm$props
+storm$totaldmg <- storm$totaldmg
+```
+
+<br />  
+
+We'll look at the number of observations per year:
+```{r stormtable}
+table(storm$year)
+```
+
+By doing a table of the years, we can see the number of observations starts going up around 1993. We'll subset the original data set to contain only the records from 1993 onwards. This is also convenient because these values do not account for inflation, which would strongly underestimate older observations.  
+Another reason to do this is because infrastructures have significantly improved in the last years. As this is a report to help communities prepare for severe weather events, it's important to take into account the change in infrastructures over time. As such, the values from earlier years would overestimate the damage these events can cause nowadays.  
+It is important to have this in mind for the rest of this analysis since it can have strong impacts on some results, namely in the "fatalities" category.
+```{r storm93}
+storm <- storm[which(storm$year >= 1993), ]
+```
+<br />  
+
+To better analyse the data, we'll divide the data set into 3 different tables. Each table is for a different variable: injuries, fatalities and total damage (both crop and property).
+We'll start by creating new tables which contain the sum of the fatalities or injuries per event type, using the `aggregate` function. The tables are ordered from most injuries/fatalities to least, so that they are sorted from biggest to lowest bar in the upcoming barplots.
+```{r health}
+fatality <- aggregate(fatalities ~ evtype, data = storm, FUN = sum)
+fatality <- fatality[order(fatality$fatalities, decreasing = TRUE),]
+
+injury <- aggregate(injuries ~ evtype, data = storm, FUN = sum)
+injury <- injury[order(injury$injuries, decreasing = TRUE),]
+```
+
+Next we return to the data set from 1993 onwards and create a table which contains the sum of the total damage by event type. The tables are ordered from most damage to least. We divide the results by a billion so that the barplot becomes easier to read.
+```{r damage}
+damage <- aggregate(totaldmg ~ evtype, data = storm, FUN = sum)
+damage <- damage[order(damage$totaldmg, decreasing = TRUE),]
+damage$totaldmg <- damage$totaldmg / 1000000000
+```
+
+With this, we are now ready to see the results of the analysis.
+<br />  
+<br />  
+
+##Results
+###Effects of severe weather events on population health
+  
+   
+We'll start by looking at the top 10 event types in the "injuries" category.
+```{r injuryplot, fig.height= 6, fig.width = 5}
+par(mar = c(10, 4, 4, 2))
+
+injuryplot <- barplot(head(injury$injuries, n=10), col="darkseagreen", names.arg="", main = "Number of injuries by event type", xlab = "", ylab = "Injuries")
+mtext("Event Type", side=1, line=7)
+mtext("Figure 1: barplot of the total number of injuries by event type,\nbetween 1993 and 2011, in the USA.", side=1, line = 9, cex = 0.85, adj = 0)
+vps <- baseViewports()
+pushViewport(vps$inner, vps$figure, vps$plot)
+grid.text(head(injury$evtype, n=10), x = unit(injuryplot, "native"), y=unit(-1, "lines"), just="right", rot=60, gp = gpar(fontsize = 10))
+```
+<br />  
+We can see that the event type with most injuries was `r tolower(injury[1, 1])`, with a total of `r options(scipen = 999); injury[1, 2]` injuries. Other important events were `r tolower(injury[2, 1])` (`r options(scipen = 999); injury[2, 2]`), `r tolower(injury[3, 1])` (`r options(scipen = 999); injury[3, 2]`), `r tolower(injury[4, 1])` (`r options(scipen = 999); injury[4, 2]`) and `r tolower(injury[5, 1])` (`r options(scipen = 999); injury[5, 2]`).
+
+<br />  
+
+
+Top 10 weather events with most fatalities:
+```{r fatalplot, fig.height= 6, fig.width = 5}
+par(mar = c(11, 4, 4, 2))
+fatalplot <- barplot(head(fatality$fatalities, n=10), col="darkcyan", names.arg="", main = "Number of fatalities by event type", xlab = "", ylab = "Fatalities")
+mtext("Event Type", side=1, line=7)
+mtext("Figure 2: barplot of the total number of fatalities by event type,\nbetween 1993 and 2011, in the USA.", side=1, line = 9, cex = 0.85, adj = 0)
+vps <- baseViewports()
+pushViewport(vps$inner, vps$figure, vps$plot)
+grid.text(head(fatality$evtype, n=10), x = unit(fatalplot, "native"), y=unit(-1, "lines"), just="right", rot=60, gp = gpar(fontsize = 10))
+```
+<br /> 
+The event type with most fatalities was `r tolower(fatality[1, 1])`, with a total of `r fatality[1, 2]` fatalities. Other important events were `r tolower(fatality[2, 1])` (`r fatality[2, 2]`), `r tolower(fatality[3, 1])` (`r fatality[3, 2]`), `r tolower(fatality[4, 1])` (`r fatality[4, 2]`) and `r tolower(fatality[5, 1])` (`r fatality[5, 2]`).  
+
+<br />
+<br />  
+
+###Economic consequences of severe weather events
+   
+   
+We will look at the combined damage done to crops and properties since 1993, by event type. The costs are in dollars and not adjusted for inflation. The barplot only includes the top 10 weather events that caused the most damage.
+```{r dmgplot, fig.height= 6, fig.width = 5}
+par(mar = c(11, 4, 4, 2))
+dmgplot <- barplot(head(damage$totaldmg, n=10), col="indianred3", names.arg="", main = "Total damage cost per event type", xlab = "", ylab = "Total damage cost (billion US dollar)")
+mtext("Event Type", side=1, line=7)
+mtext(paste("Figure 3: barplot of the total damage cost (in billion US dollars)", "\nby event type, between 1993 and 2011, in the USA."), side=1, line = 9, cex = 0.80, adj = 0)
+vps <- baseViewports()
+pushViewport(vps$inner, vps$figure, vps$plot)
+grid.text(head(damage$evtype, n=10), x = unit(fatalplot, "native"), y=unit(-1, "lines"), just="right", rot=60, gp = gpar(fontsize = 10))
+```
+<br />  
+The event type with the most damage caused (measured in dollars) is `r tolower(damage[1, 1])`, with a total cost of `r round(damage[1, 2], digits = 0)` billion dollars. Other important events were `r tolower(damage[2, 1])` (`r round(damage[2, 2], digits = 0)`), `r tolower(damage[3, 1])` (`r round(damage[3, 2], digits = 0)`) and `r tolower(damage[4, 1])` (`r round(damage[4, 2], digits = 0)`).
+<br />
+
+This seems to indicate that communities should aim to prepare better for weather events like tornadoes, floods and flashfloods, heat and excessive heat, storm surges, thunderstorm winds and lightning.
+
+
+
+[1]: http://www.water.ca.gov/floodsafe/ca-flood-preparedness/fpw-day3.cfm "California Department of Water Resources"
